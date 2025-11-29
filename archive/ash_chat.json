@@ -1,0 +1,147 @@
+{
+    "name": "ash_telegram_chat_router",
+    "nodes": [
+        {
+            "parameters": {
+                "updates": [
+                    "message"
+                ],
+                "additionalFields": {}
+            },
+            "name": "Telegram Trigger",
+            "type": "n8n-nodes-base.telegramTrigger",
+            "typeVersion": 1,
+            "position": [
+                460,
+                300
+            ],
+            "webhookId": "ash-telegram-webhook",
+            "credentials": {
+                "telegramApi": {
+                    "id": "YOUR_TELEGRAM_CREDENTIALS_ID",
+                    "name": "Telegram account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "functionCode": "// Takes Telegram message and produces a clean payload for GPT\nconst items = $input.all();\n\nreturn items.map(item => {\n  const msg = item.json.message || {};\n  const from = msg.from || {};\n  const chat = msg.chat || {};\n\n  return {\n    json: {\n      userId: from.id,\n      userName: from.first_name || from.username || \"User\",\n      channel: \"telegram\",\n      chatId: chat.id,\n      text: msg.text || \"\",\n    }\n  };\n});"
+            },
+            "name": "normalize_message",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                680,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "model": "gpt-4o",
+                "messages": {
+                    "values": [
+                        {
+                            "role": "system",
+                            "content": "You are **Ash**, a personal AI assistant for a single user (Jackson).\nYour main roles:\n\n1. Answer questions clearly and concisely.\n2. When the user talks about their emotions or mood, gently reflect back and, if appropriate, suggest music or a short break.\n3. When the user asks for “news”, “updates”, or “reports”, summarize relevant information and, if needed, mark an `action` to trigger news or report workflows.\n\nRespond in a friendly, grounded tone.\nFor now, do NOT call external tools; just talk normally.\n\nOutput MUST be valid JSON with:\n{\n\"assistant_reply\": \"<your message to user>\",\n\"action\": \"<one of: 'none', 'news', 'music', 'report'>\",\n\"notes\": \"<short internal reasoning in 1–2 sentences>\"\n}"
+                        },
+                        {
+                            "role": "user",
+                            "content": "={{$json[\"text\"]}}"
+                        }
+                    ]
+                }
+            },
+            "name": "OpenAI (GPT-4o)",
+            "type": "n8n-nodes-base.openAi",
+            "typeVersion": 1,
+            "position": [
+                900,
+                300
+            ],
+            "credentials": {
+                "openAiApi": {
+                    "id": "YOUR_OPENAI_CREDENTIALS_ID",
+                    "name": "OpenAI account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "functionCode": "const items = $input.all();\n\nreturn items.map(item => {\n  let raw = item.json.data || item.json; // depends on node output setting\n  let content = raw.choices?.[0]?.message?.content || raw.content || \"\";\n\n  let parsed;\n  try {\n    parsed = JSON.parse(content);\n  } catch (e) {\n    parsed = {\n      assistant_reply: content,\n      action: \"none\",\n      notes: \"Failed to parse JSON, using raw content.\"\n    };\n  }\n\n  return {\n    json: {\n      assistant_reply: parsed.assistant_reply || content,\n      action: parsed.action || \"none\",\n      notes: parsed.notes || \"\",\n      // pass through original chatId and user info from previous node\n      chatId: $item(0).$node[\"normalize_message\"].json.chatId,\n      userId: $item(0).$node[\"normalize_message\"].json.userId,\n      userName: $item(0).$node[\"normalize_message\"].json.userName,\n    }\n  };\n});"
+            },
+            "name": "extract_reply",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                1120,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "chatId": "={{$json[\"chatId\"]}}",
+                "text": "={{$json[\"assistant_reply\"]}}",
+                "additionalFields": {}
+            },
+            "name": "Telegram Send Message",
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1,
+            "position": [
+                1340,
+                300
+            ],
+            "credentials": {
+                "telegramApi": {
+                    "id": "YOUR_TELEGRAM_CREDENTIALS_ID",
+                    "name": "Telegram account"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Telegram Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "normalize_message",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "normalize_message": {
+            "main": [
+                [
+                    {
+                        "node": "OpenAI (GPT-4o)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "OpenAI (GPT-4o)": {
+            "main": [
+                [
+                    {
+                        "node": "extract_reply",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "extract_reply": {
+            "main": [
+                [
+                    {
+                        "node": "Telegram Send Message",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}
